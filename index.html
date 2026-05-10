@@ -1,0 +1,707 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8"/>
+<meta name="viewport" content="width=device-width,initial-scale=1.0,maximum-scale=1.0"/>
+<title>Rudra Construction — Site Manager</title>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/react/18.2.0/umd/react.production.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/react-dom/18.2.0/umd/react-dom.production.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/babel-standalone/7.23.2/babel.min.js"></script>
+<style>
+*{box-sizing:border-box;margin:0;padding:0}
+body{background:#0c0e13;color:#e8dcc8;font-family:Georgia,'Times New Roman',serif;-webkit-tap-highlight-color:transparent}
+input,select,textarea,button{font-family:inherit}
+::-webkit-scrollbar{width:3px}::-webkit-scrollbar-track{background:#0c0e13}::-webkit-scrollbar-thumb{background:#374151;border-radius:2px}
+</style>
+</head>
+<body>
+<div id="root"></div>
+<script type="text/babel">
+const {useState,useEffect,useCallback}=React;
+
+// ── Constants ──────────────────────────────────────────────
+const DAYS=["Su","Mo","Tu","We","Th","Fr","Sa"];
+const MONTHS=["January","February","March","April","May","June","July","August","September","October","November","December"];
+const ROLES=["Labour","Mason","Helper","Carpenter","Plumber","Electrician","Supervisor","Driver","Engineer"];
+const UNITS=["Bag","MT","CFT","CUM","RMT","Sqm","Nos","Kg","Ltr","Truck"];
+const EXP_CATS=["Fuel","Tools","Transport","Rent","Food","Miscellaneous"];
+const NEXT={"-":"P",P:"H",H:"A",A:"-"};
+const ATT_S={P:{c:"#22c55e",bg:"#14532d"},H:{c:"#f59e0b",bg:"#451a03"},A:{c:"#ef4444",bg:"#450a0a"},"-":{c:"#374151",bg:"#1a1a1a"}};
+const KEY="rudra_v3";
+
+// ── Storage ────────────────────────────────────────────────
+function load(){try{const d=localStorage.getItem(KEY);return d?JSON.parse(d):null}catch{return null}}
+function save(d){try{localStorage.setItem(KEY,JSON.stringify(d))}catch{}}
+
+// ── Helpers ────────────────────────────────────────────────
+function uid(){return Date.now().toString(36)+Math.random().toString(36).slice(2,6)}
+function daysInMonth(y,m){return new Date(y,m+1,0).getDate()}
+function today(){const d=new Date();return{y:d.getFullYear(),m:d.getMonth(),d:d.getDate()}}
+function fmt(n){return Number(n||0).toLocaleString("en-IN")}
+function fmtDate(s){if(!s)return"";const[y,m,d]=s.split("-");return`${d}/${m}/${y}`}
+
+// ── Styles ─────────────────────────────────────────────────
+const S={
+  card:{background:"#16191f",borderRadius:10,border:"1px solid #252830",overflow:"hidden",marginBottom:12},
+  inp:{width:"100%",background:"#0c0e13",border:"1px solid #374151",borderRadius:6,padding:"9px 11px",color:"#e8dcc8",fontSize:13},
+  btnPrimary:{background:"#b45309",color:"#fff",border:"none",borderRadius:7,padding:"10px 16px",fontWeight:700,cursor:"pointer",fontSize:13},
+  btnGreen:{background:"#15803d",color:"#fff",border:"none",borderRadius:6,padding:"9px 14px",fontWeight:700,cursor:"pointer",fontSize:13},
+  btnGray:{background:"#1f2937",color:"#9ca3af",border:"none",borderRadius:6,padding:"9px 14px",cursor:"pointer",fontSize:13},
+  btnRed:{background:"#450a0a",color:"#ef4444",border:"1px solid #7f1d1d",borderRadius:6,padding:"6px 10px",cursor:"pointer",fontSize:12},
+  row:{display:"flex",gap:8,marginTop:8},
+  label:{fontSize:11,color:"#6b7280",marginBottom:3,letterSpacing:0.5},
+};
+
+// ══════════════════════════════════════════════════════════
+// ROOT APP
+// ══════════════════════════════════════════════════════════
+function App(){
+  const t=today();
+  const [data,setData]=useState({sites:[],workers:{},attendance:{},materials:{},expenses:{}});
+  const [activeSite,setActiveSite]=useState(null);
+  const [siteTab,setSiteTab]=useState("attendance");
+  const [selY,setSelY]=useState(t.y);
+  const [selM,setSelM]=useState(t.m);
+
+  useEffect(()=>{
+    const d=load();
+    if(d)setData(d);
+  },[]);
+
+  useEffect(()=>{save(data)},[data]);
+
+  function updateData(fn){setData(prev=>{const next={...prev};fn(next);return next})}
+
+  // Site CRUD
+  function addSite(name,loc){
+    updateData(d=>{
+      const s={id:uid(),name:name.trim(),location:loc.trim(),createdAt:new Date().toISOString().slice(0,10)};
+      d.sites=[...d.sites,s];
+    });
+  }
+  function deleteSite(id){
+    if(!confirm("Site aur uska saara data delete karein?"))return;
+    updateData(d=>{
+      d.sites=d.sites.filter(s=>s.id!==id);
+      delete d.workers[id]; delete d.materials[id]; delete d.expenses[id];
+      Object.keys(d.attendance).filter(k=>k.startsWith(id+"-")).forEach(k=>delete d.attendance[k]);
+    });
+    setActiveSite(null);
+  }
+
+  // Worker CRUD
+  function addWorker(siteId,name,role,wage){
+    updateData(d=>{
+      if(!d.workers[siteId])d.workers[siteId]=[];
+      d.workers[siteId]=[...d.workers[siteId],{id:uid(),name,role,wage:parseFloat(wage)}];
+    });
+  }
+  function removeWorker(siteId,wid){
+    if(!confirm("Worker hatayein?"))return;
+    updateData(d=>{d.workers[siteId]=(d.workers[siteId]||[]).filter(w=>w.id!==wid)});
+  }
+
+  // Attendance
+  function markAtt(siteId,wid,day){
+    const mk=`${siteId}-${selY}-${selM}`;
+    updateData(d=>{
+      if(!d.attendance[mk])d.attendance[mk]={};
+      if(!d.attendance[mk][wid])d.attendance[mk][wid]={};
+      const curr=d.attendance[mk][wid][day]||"-";
+      d.attendance[mk][wid][day]=NEXT[curr];
+    });
+  }
+  function getAtt(siteId){
+    return data.attendance[`${siteId}-${selY}-${selM}`]||{};
+  }
+  function workerStats(siteId,wid){
+    const wa=getAtt(siteId)[wid]||{};
+    const dim=daysInMonth(selY,selM);
+    let p=0,h=0,a=0;
+    for(let d=1;d<=dim;d++){const s=wa[d]||"-";if(s==="P")p++;else if(s==="H")h++;else if(s==="A")a++;}
+    const days=p+h*0.5;
+    const w=(data.workers[siteId]||[]).find(x=>x.id===wid);
+    return{p,h,a,days,amount:w?days*w.wage:0};
+  }
+
+  // Materials
+  function addMaterial(siteId,item){
+    updateData(d=>{
+      if(!d.materials[siteId])d.materials[siteId]=[];
+      d.materials[siteId]=[{id:uid(),...item},...d.materials[siteId]];
+    });
+  }
+  function deleteMaterial(siteId,mid){
+    updateData(d=>{d.materials[siteId]=(d.materials[siteId]||[]).filter(m=>m.id!==mid)});
+  }
+
+  // Expenses
+  function addExpense(siteId,exp){
+    updateData(d=>{
+      if(!d.expenses[siteId])d.expenses[siteId]=[];
+      d.expenses[siteId]=[{id:uid(),...exp},...d.expenses[siteId]];
+    });
+  }
+  function deleteExpense(siteId,eid){
+    updateData(d=>{d.expenses[siteId]=(d.expenses[siteId]||[]).filter(e=>e.id!==eid)});
+  }
+
+  // Summary calcs
+  function siteSummary(siteId){
+    const workers=data.workers[siteId]||[];
+    // All-month staff total
+    const staffTotal=workers.reduce((sum,w)=>{
+      // Sum across all months
+      let total=0;
+      Object.keys(data.attendance).filter(k=>k.startsWith(siteId+"-")).forEach(mk=>{
+        const wa=(data.attendance[mk][w.id]||{});
+        let p=0,h=0;
+        Object.values(wa).forEach(s=>{if(s==="P")p++;else if(s==="H")h++;});
+        total+=(p+h*0.5)*w.wage;
+      });
+      return sum+total;
+    },0);
+    const matTotal=(data.materials[siteId]||[]).reduce((s,m)=>s+Number(m.amount||0),0);
+    const expTotal=(data.expenses[siteId]||[]).reduce((s,e)=>s+Number(e.amount||0),0);
+    return{staffTotal,matTotal,expTotal,total:staffTotal+matTotal+expTotal};
+  }
+
+  // ── If no site selected → Site List ──
+  const site=data.sites.find(s=>s.id===activeSite);
+
+  return activeSite && site
+    ? <SiteView
+        site={site}
+        tab={siteTab} setTab={setSiteTab}
+        selY={selY} selM={selM} setSelY={setSelY} setSelM={setSelM}
+        workers={data.workers[site.id]||[]}
+        materials={data.materials[site.id]||[]}
+        expenses={data.expenses[site.id]||[]}
+        getAtt={()=>getAtt(site.id)}
+        markAtt={(wid,day)=>markAtt(site.id,wid,day)}
+        workerStats={(wid)=>workerStats(site.id,wid)}
+        addWorker={(n,r,w)=>addWorker(site.id,n,r,w)}
+        removeWorker={(wid)=>removeWorker(site.id,wid)}
+        addMaterial={(item)=>addMaterial(site.id,item)}
+        deleteMaterial={(mid)=>deleteMaterial(site.id,mid)}
+        addExpense={(exp)=>addExpense(site.id,exp)}
+        deleteExpense={(eid)=>deleteExpense(site.id,eid)}
+        summary={siteSummary(site.id)}
+        onBack={()=>setActiveSite(null)}
+        onDelete={()=>deleteSite(site.id)}
+      />
+    : <SiteList
+        sites={data.sites}
+        getSummary={siteSummary}
+        onSelect={setActiveSite}
+        onAdd={addSite}
+      />;
+}
+
+// ══════════════════════════════════════════════════════════
+// SITE LIST
+// ══════════════════════════════════════════════════════════
+function SiteList({sites,getSummary,onSelect,onAdd}){
+  const [show,setShow]=useState(false);
+  const [name,setName]=useState("");
+  const [loc,setLoc]=useState("");
+
+  function submit(){
+    if(!name.trim())return;
+    onAdd(name,loc);
+    setName("");setLoc("");setShow(false);
+  }
+
+  return(
+    <div style={{minHeight:"100vh"}}>
+      {/* Header */}
+      <div style={{background:"linear-gradient(135deg,#1a0f00,#2d1a00)",borderBottom:"2px solid #b45309",padding:"18px 16px"}}>
+        <div style={{fontSize:10,letterSpacing:4,color:"#92400e",textTransform:"uppercase"}}>Rudra Construction</div>
+        <div style={{fontSize:22,fontWeight:700,color:"#fbbf24",marginTop:2}}>🏗 Site Manager</div>
+        <div style={{fontSize:12,color:"#6b7280",marginTop:2}}>{sites.length} active sites</div>
+      </div>
+
+      <div style={{padding:16}}>
+        <button onClick={()=>setShow(true)} style={{...S.btnPrimary,width:"100%",marginBottom:16,padding:12,fontSize:14}}>
+          + Naya Site Add Karein
+        </button>
+
+        {show && (
+          <div style={{...S.card,padding:14,marginBottom:16,border:"1px solid #b45309"}}>
+            <div style={{fontWeight:700,color:"#fbbf24",marginBottom:12}}>Naya Site</div>
+            <div style={S.label}>Site Name *</div>
+            <input placeholder="e.g. RCC Drain Ward-5, Kudra" value={name} onChange={e=>setName(e.target.value)} style={S.inp}/>
+            <div style={{...S.label,marginTop:8}}>Location</div>
+            <input placeholder="e.g. Nagar Panchayat Kudra" value={loc} onChange={e=>setLoc(e.target.value)} style={S.inp}/>
+            <div style={S.row}>
+              <button onClick={submit} style={{...S.btnGreen,flex:1}}>✓ Save</button>
+              <button onClick={()=>setShow(false)} style={{...S.btnGray,flex:1}}>Cancel</button>
+            </div>
+          </div>
+        )}
+
+        {sites.length===0 && !show && (
+          <div style={{textAlign:"center",padding:48,color:"#4b5563"}}>
+            <div style={{fontSize:48}}>🏗</div>
+            <div style={{marginTop:12,fontSize:15}}>Koi site nahi hai abhi</div>
+            <div style={{fontSize:12,marginTop:4}}>Upar button se add karein</div>
+          </div>
+        )}
+
+        {sites.map(site=>{
+          const sm=getSummary(site.id);
+          return(
+            <div key={site.id} onClick={()=>onSelect(site.id)} style={{...S.card,cursor:"pointer",padding:14}}>
+              <div style={{display:"flex",justifyContent:"space-between",alignItems:"flex-start"}}>
+                <div style={{flex:1}}>
+                  <div style={{fontWeight:700,fontSize:15,color:"#fcd34d"}}>{site.name}</div>
+                  {site.location && <div style={{fontSize:11,color:"#92400e",marginTop:2}}>📍 {site.location}</div>}
+                  <div style={{fontSize:10,color:"#4b5563",marginTop:2}}>Since {fmtDate(site.createdAt)}</div>
+                </div>
+                <div style={{textAlign:"right"}}>
+                  <div style={{fontSize:14,fontWeight:700,color:"#a3e635"}}>₹{fmt(sm.total)}</div>
+                  <div style={{fontSize:10,color:"#6b7280"}}>Total spend</div>
+                </div>
+              </div>
+              <div style={{display:"flex",gap:8,marginTop:10}}>
+                {[["👷",sm.staffTotal,"Staff"],["🧱",sm.matTotal,"Material"],["📦",sm.expTotal,"Other"]].map(([ic,v,l])=>(
+                  <div key={l} style={{flex:1,background:"#0c0e13",borderRadius:6,padding:"6px 4px",textAlign:"center"}}>
+                    <div style={{fontSize:11}}>{ic}</div>
+                    <div style={{fontSize:11,fontWeight:700,color:"#e8dcc8"}}>₹{fmt(v)}</div>
+                    <div style={{fontSize:9,color:"#6b7280"}}>{l}</div>
+                  </div>
+                ))}
+              </div>
+              <div style={{textAlign:"right",marginTop:6,fontSize:11,color:"#374151"}}>Tap to open →</div>
+            </div>
+          );
+        })}
+      </div>
+    </div>
+  );
+}
+
+// ══════════════════════════════════════════════════════════
+// SITE VIEW
+// ══════════════════════════════════════════════════════════
+function SiteView({site,tab,setTab,selY,selM,setSelY,setSelM,workers,materials,expenses,getAtt,markAtt,workerStats,addWorker,removeWorker,addMaterial,deleteMaterial,addExpense,deleteExpense,summary,onBack,onDelete}){
+  const t=today();
+  function prevMonth(){let m=selM-1,y=selY;if(m<0){m=11;y--;}setSelM(m);setSelY(y);}
+  function nextMonth(){let m=selM+1,y=selY;if(m>11){m=0;y++;}setSelM(m);setSelY(y);}
+
+  return(
+    <div style={{minHeight:"100vh"}}>
+      {/* Header */}
+      <div style={{background:"linear-gradient(135deg,#1a0f00,#2d1a00)",borderBottom:"2px solid #b45309",padding:"12px 14px",position:"sticky",top:0,zIndex:100}}>
+        <div style={{display:"flex",alignItems:"center",gap:10,marginBottom:6}}>
+          <button onClick={onBack} style={{background:"#2d1a00",border:"1px solid #92400e",color:"#fbbf24",borderRadius:5,padding:"4px 10px",cursor:"pointer",fontSize:14}}>‹</button>
+          <div style={{flex:1,minWidth:0}}>
+            <div style={{fontSize:14,fontWeight:700,color:"#fcd34d",whiteSpace:"nowrap",overflow:"hidden",textOverflow:"ellipsis"}}>{site.name}</div>
+            {site.location&&<div style={{fontSize:10,color:"#92400e"}}>📍 {site.location}</div>}
+          </div>
+          <button onClick={onDelete} style={{...S.btnRed,fontSize:11,padding:"4px 8px"}}>🗑 Site</button>
+        </div>
+        {/* Month selector (only for attendance) */}
+        {tab==="attendance"&&(
+          <div style={{display:"flex",gap:6,alignItems:"center"}}>
+            <button onClick={prevMonth} style={{background:"#2d1a00",border:"1px solid #92400e",color:"#fbbf24",borderRadius:4,padding:"2px 9px",cursor:"pointer",fontSize:15}}>‹</button>
+            <span style={{fontSize:12,fontWeight:600,color:"#fcd34d",minWidth:115,textAlign:"center"}}>{MONTHS[selM]} {selY}</span>
+            <button onClick={nextMonth} style={{background:"#2d1a00",border:"1px solid #92400e",color:"#fbbf24",borderRadius:4,padding:"2px 9px",cursor:"pointer",fontSize:15}}>›</button>
+          </div>
+        )}
+      </div>
+
+      {/* Tabs */}
+      <div style={{display:"flex",background:"#13151a",borderBottom:"1px solid #252830",position:"sticky",top:tab==="attendance"?88:56,zIndex:99}}>
+        {[["attendance","📋 Attendance"],["materials","🧱 Materials"],["expenses","📦 Expenses"],["summary","📊 Summary"]].map(([v,l])=>(
+          <button key={v} onClick={()=>setTab(v)} style={{flex:1,padding:"9px 2px",fontSize:11,fontWeight:600,background:tab===v?"#1c2a3a":"transparent",color:tab===v?"#fbbf24":"#6b7280",border:"none",borderBottom:tab===v?"2px solid #f59e0b":"2px solid transparent",cursor:"pointer",letterSpacing:0.3}}>{l}</button>
+        ))}
+      </div>
+
+      {/* Tab Content */}
+      {tab==="attendance" && <AttendanceTab workers={workers} selY={selY} selM={selM} getAtt={getAtt} markAtt={markAtt} workerStats={workerStats} addWorker={addWorker} removeWorker={removeWorker} today={t}/>}
+      {tab==="materials" && <MaterialsTab materials={materials} addMaterial={addMaterial} deleteMaterial={deleteMaterial}/>}
+      {tab==="expenses" && <ExpensesTab expenses={expenses} addExpense={addExpense} deleteExpense={deleteExpense}/>}
+      {tab==="summary" && <SummaryTab summary={summary} workers={workers} materials={materials} expenses={expenses} siteName={site.name}/>}
+    </div>
+  );
+}
+
+// ══════════════════════════════════════════════════════════
+// ATTENDANCE TAB
+// ══════════════════════════════════════════════════════════
+function AttendanceTab({workers,selY,selM,getAtt,markAtt,workerStats,addWorker,removeWorker,today}){
+  const [showAdd,setShowAdd]=useState(false);
+  const [showWorkerList,setShowWorkerList]=useState(false);
+  const [name,setName]=useState("");
+  const [role,setRole]=useState("Labour");
+  const [wage,setWage]=useState("");
+  const dim=daysInMonth(selY,selM);
+  const att=getAtt();
+
+  function submit(){
+    if(!name.trim()||!wage)return;
+    addWorker(name,role,wage);
+    setName("");setRole("Labour");setWage("");setShowAdd(false);
+  }
+
+  const staffTotal=workers.reduce((s,w)=>s+workerStats(w.id).amount,0);
+
+  return(
+    <div style={{padding:"14px 0 24px"}}>
+      {/* Top bar */}
+      <div style={{padding:"0 12px 12px",display:"flex",justifyContent:"space-between",alignItems:"center"}}>
+        <div style={{fontSize:12,color:"#22c55e",fontWeight:700}}>Staff Total: ₹{fmt(staffTotal)}</div>
+        <div style={{display:"flex",gap:6}}>
+          <button onClick={()=>setShowWorkerList(!showWorkerList)} style={{...S.btnGray,padding:"6px 10px",fontSize:11}}>{showWorkerList?"📋 Calendar":"👷 Workers"}</button>
+          <button onClick={()=>setShowAdd(!showAdd)} style={{...S.btnPrimary,padding:"6px 10px",fontSize:11}}>+ Worker</button>
+        </div>
+      </div>
+
+      {showAdd && (
+        <div style={{margin:"0 12px 12px",padding:14,...S.card,border:"1px solid #b45309"}}>
+          <div style={{fontWeight:700,color:"#fbbf24",marginBottom:10,fontSize:13}}>Naya Worker</div>
+          <div style={S.label}>Naam *</div>
+          <input placeholder="e.g. Ramesh Kumar" value={name} onChange={e=>setName(e.target.value)} style={S.inp}/>
+          <div style={S.row}>
+            <div style={{flex:1}}>
+              <div style={{...S.label,marginTop:8}}>Role</div>
+              <select value={role} onChange={e=>setRole(e.target.value)} style={S.inp}>
+                {ROLES.map(r=><option key={r}>{r}</option>)}
+              </select>
+            </div>
+            <div style={{flex:1}}>
+              <div style={{...S.label,marginTop:8}}>Daily Wage (₹)</div>
+              <input placeholder="400" type="number" value={wage} onChange={e=>setWage(e.target.value)} style={S.inp}/>
+            </div>
+          </div>
+          <div style={S.row}>
+            <button onClick={submit} style={{...S.btnGreen,flex:1}}>✓ Save</button>
+            <button onClick={()=>setShowAdd(false)} style={{...S.btnGray,flex:1}}>Cancel</button>
+          </div>
+        </div>
+      )}
+
+      {workers.length===0 && (
+        <div style={{textAlign:"center",padding:40,color:"#4b5563"}}>
+          <div style={{fontSize:36}}>👷</div>
+          <div style={{marginTop:8}}>Koi worker nahi — add karein</div>
+        </div>
+      )}
+
+      {/* Worker Management List */}
+      {showWorkerList && workers.length>0 && (
+        <div style={{padding:"0 12px 12px"}}>
+          {workers.map(w=>(
+            <div key={w.id} style={{...S.card,padding:"10px 12px",display:"flex",justifyContent:"space-between",alignItems:"center"}}>
+              <div>
+                <div style={{fontWeight:700,color:"#fcd34d",fontSize:13}}>{w.name}</div>
+                <div style={{fontSize:11,color:"#92400e"}}>{w.role} · ₹{w.wage}/day</div>
+                <div style={{fontSize:11,color:"#22c55e",marginTop:2}}>This month: ₹{fmt(workerStats(w.id).amount)}</div>
+              </div>
+              <button onClick={()=>removeWorker(w.id)} style={S.btnRed}>🗑</button>
+            </div>
+          ))}
+        </div>
+      )}
+
+      {/* Attendance Calendar */}
+      {!showWorkerList && workers.map(w=>{
+        const wa=att[w.id]||{};
+        const st=workerStats(w.id);
+        const firstDow=new Date(selY,selM,1).getDay();
+        return(
+          <div key={w.id} style={{margin:"0 12px 14px",...S.card}}>
+            <div style={{padding:"10px 12px",background:"linear-gradient(90deg,#1c1400,#16191f)",display:"flex",justifyContent:"space-between",alignItems:"center",borderBottom:"1px solid #252830"}}>
+              <div>
+                <div style={{fontWeight:700,fontSize:14,color:"#fcd34d"}}>{w.name}</div>
+                <div style={{fontSize:10,color:"#92400e"}}>{w.role} · ₹{w.wage}/day</div>
+              </div>
+              <div style={{textAlign:"right"}}>
+                <div style={{fontSize:13,color:"#22c55e",fontWeight:700}}>₹{fmt(st.amount)}</div>
+                <div style={{fontSize:10,color:"#6b7280"}}>{st.days} days</div>
+              </div>
+            </div>
+            <div style={{padding:"10px 10px 6px"}}>
+              <div style={{display:"grid",gridTemplateColumns:"repeat(7,1fr)",gap:3,marginBottom:4}}>
+                {DAYS.map(d=><div key={d} style={{fontSize:8,textAlign:"center",color:"#6b7280",fontWeight:600}}>{d}</div>)}
+              </div>
+              <div style={{display:"grid",gridTemplateColumns:"repeat(7,1fr)",gap:3}}>
+                {Array.from({length:firstDow},(_,i)=><div key={"e"+i}/>)}
+                {Array.from({length:dim},(_,i)=>{
+                  const day=i+1;
+                  const s=wa[day]||"-";
+                  const isToday=selY===today.y&&selM===today.m&&day===today.d;
+                  return(
+                    <button key={day} onClick={()=>markAtt(w.id,day)} style={{aspectRatio:"1",borderRadius:3,border:isToday?"1.5px solid #fbbf24":"1px solid #252830",background:ATT_S[s].bg,color:ATT_S[s].c,fontSize:8,fontWeight:700,cursor:"pointer",padding:0,display:"flex",flexDirection:"column",alignItems:"center",justifyContent:"center"}}>
+                      <span style={{fontSize:7,color:"#6b7280",lineHeight:1}}>{day}</span>
+                      <span style={{fontSize:9,lineHeight:1.2}}>{s==="-"?"·":s}</span>
+                    </button>
+                  );
+                })}
+              </div>
+            </div>
+            <div style={{display:"flex",borderTop:"1px solid #252830"}}>
+              {[["✅",st.p,"P","#22c55e"],["🌗",st.h,"H","#f59e0b"],["❌",st.a,"A","#ef4444"]].map(([ic,v,l,c])=>(
+                <div key={l} style={{flex:1,padding:"5px 2px",textAlign:"center",borderRight:"1px solid #252830",fontSize:10}}>
+                  <div>{ic}</div><div style={{fontWeight:700,color:c}}>{v}</div><div style={{color:"#6b7280",fontSize:9}}>{l}</div>
+                </div>
+              ))}
+              <div style={{flex:1,padding:"5px 2px",textAlign:"center",fontSize:10}}>
+                <div>💰</div><div style={{fontWeight:700,color:"#fcd34d",fontSize:10}}>₹{fmt(st.amount)}</div><div style={{color:"#6b7280",fontSize:9}}>Total</div>
+              </div>
+            </div>
+          </div>
+        );
+      })}
+      {workers.length>0&&!showWorkerList&&(
+        <div style={{padding:"4px 12px 8px",display:"flex",gap:10,justifyContent:"center"}}>
+          {[["P","Present","#22c55e"],["H","Half","#f59e0b"],["A","Absent","#ef4444"]].map(([k,l,c])=>(
+            <div key={k} style={{display:"flex",alignItems:"center",gap:3,fontSize:10}}>
+              <div style={{width:14,height:14,borderRadius:2,background:ATT_S[k].bg,border:`1px solid ${c}`,display:"flex",alignItems:"center",justifyContent:"center",fontSize:8,color:c,fontWeight:700}}>{k}</div>
+              <span style={{color:"#6b7280"}}>{l}</span>
+            </div>
+          ))}
+          <span style={{fontSize:10,color:"#374151"}}>· Tap to cycle</span>
+        </div>
+      )}
+    </div>
+  );
+}
+
+// ══════════════════════════════════════════════════════════
+// MATERIALS TAB
+// ══════════════════════════════════════════════════════════
+function MaterialsTab({materials,addMaterial,deleteMaterial}){
+  const [show,setShow]=useState(false);
+  const [date,setDate]=useState(new Date().toISOString().slice(0,10));
+  const [item,setItem]=useState("");
+  const [qty,setQty]=useState("");
+  const [unit,setUnit]=useState("Bag");
+  const [rate,setRate]=useState("");
+
+  const amount=qty&&rate?parseFloat(qty)*parseFloat(rate):0;
+  const total=materials.reduce((s,m)=>s+Number(m.amount||0),0);
+
+  function submit(){
+    if(!item.trim()||!qty||!rate)return;
+    addMaterial({date,item:item.trim(),qty:parseFloat(qty),unit,rate:parseFloat(rate),amount});
+    setItem("");setQty("");setRate("");setShow(false);
+  }
+
+  return(
+    <div style={{padding:14}}>
+      <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:12}}>
+        <div style={{fontSize:13,fontWeight:700,color:"#f59e0b"}}>🧱 Total: ₹{fmt(total)}</div>
+        <button onClick={()=>setShow(!show)} style={{...S.btnPrimary,padding:"7px 12px",fontSize:12}}>+ Entry</button>
+      </div>
+
+      {show&&(
+        <div style={{...S.card,padding:14,marginBottom:12,border:"1px solid #b45309"}}>
+          <div style={{fontWeight:700,color:"#fbbf24",marginBottom:10,fontSize:13}}>Material Entry</div>
+          <div style={S.row}>
+            <div style={{flex:1}}><div style={S.label}>Date</div><input type="date" value={date} onChange={e=>setDate(e.target.value)} style={S.inp}/></div>
+          </div>
+          <div style={{marginTop:8}}><div style={S.label}>Item Name *</div><input placeholder="e.g. Cement (ACC), Sand, Gitti..." value={item} onChange={e=>setItem(e.target.value)} style={S.inp}/></div>
+          <div style={S.row}>
+            <div style={{flex:1}}><div style={S.label}>Qty *</div><input type="number" placeholder="0" value={qty} onChange={e=>setQty(e.target.value)} style={S.inp}/></div>
+            <div style={{flex:1}}><div style={S.label}>Unit</div><select value={unit} onChange={e=>setUnit(e.target.value)} style={S.inp}>{UNITS.map(u=><option key={u}>{u}</option>)}</select></div>
+          </div>
+          <div style={S.row}>
+            <div style={{flex:1}}><div style={S.label}>Rate (₹) *</div><input type="number" placeholder="0" value={rate} onChange={e=>setRate(e.target.value)} style={S.inp}/></div>
+            <div style={{flex:1,display:"flex",flexDirection:"column",justifyContent:"flex-end"}}>
+              <div style={{background:"#1c2d00",border:"1px solid #365314",borderRadius:6,padding:"9px 11px",textAlign:"center"}}>
+                <div style={{fontSize:10,color:"#65a30d"}}>Amount</div>
+                <div style={{fontWeight:700,color:"#a3e635",fontSize:14}}>₹{fmt(amount)}</div>
+              </div>
+            </div>
+          </div>
+          <div style={S.row}>
+            <button onClick={submit} style={{...S.btnGreen,flex:1}}>✓ Save</button>
+            <button onClick={()=>setShow(false)} style={{...S.btnGray,flex:1}}>Cancel</button>
+          </div>
+        </div>
+      )}
+
+      {materials.length===0&&!show&&<div style={{textAlign:"center",padding:40,color:"#4b5563"}}><div style={{fontSize:36}}>🧱</div><div style={{marginTop:8}}>Koi material entry nahi</div></div>}
+
+      {materials.map(m=>(
+        <div key={m.id} style={{...S.card,padding:"10px 12px",display:"flex",justifyContent:"space-between",alignItems:"center"}}>
+          <div style={{flex:1,minWidth:0}}>
+            <div style={{fontWeight:700,color:"#e8dcc8",fontSize:13}}>{m.item}</div>
+            <div style={{fontSize:11,color:"#6b7280",marginTop:2}}>{fmtDate(m.date)} · {m.qty} {m.unit} × ₹{fmt(m.rate)}</div>
+          </div>
+          <div style={{textAlign:"right",marginLeft:10}}>
+            <div style={{fontWeight:700,color:"#f59e0b",fontSize:13}}>₹{fmt(m.amount)}</div>
+            <button onClick={()=>deleteMaterial(m.id)} style={{...S.btnRed,padding:"3px 7px",fontSize:11,marginTop:4}}>✕</button>
+          </div>
+        </div>
+      ))}
+    </div>
+  );
+}
+
+// ══════════════════════════════════════════════════════════
+// EXPENSES TAB
+// ══════════════════════════════════════════════════════════
+function ExpensesTab({expenses,addExpense,deleteExpense}){
+  const [show,setShow]=useState(false);
+  const [date,setDate]=useState(new Date().toISOString().slice(0,10));
+  const [desc,setDesc]=useState("");
+  const [cat,setCat]=useState("Miscellaneous");
+  const [amount,setAmount]=useState("");
+
+  const total=expenses.reduce((s,e)=>s+Number(e.amount||0),0);
+
+  function submit(){
+    if(!desc.trim()||!amount)return;
+    addExpense({date,description:desc.trim(),category:cat,amount:parseFloat(amount)});
+    setDesc("");setAmount("");setShow(false);
+  }
+
+  // Group by category for summary
+  const byCategory={};
+  expenses.forEach(e=>{byCategory[e.category]=(byCategory[e.category]||0)+Number(e.amount||0);});
+
+  return(
+    <div style={{padding:14}}>
+      <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:12}}>
+        <div style={{fontSize:13,fontWeight:700,color:"#a78bfa"}}>📦 Total: ₹{fmt(total)}</div>
+        <button onClick={()=>setShow(!show)} style={{...S.btnPrimary,padding:"7px 12px",fontSize:12}}>+ Entry</button>
+      </div>
+
+      {show&&(
+        <div style={{...S.card,padding:14,marginBottom:12,border:"1px solid #b45309"}}>
+          <div style={{fontWeight:700,color:"#fbbf24",marginBottom:10,fontSize:13}}>Other Expense</div>
+          <div style={S.row}>
+            <div style={{flex:1}}><div style={S.label}>Date</div><input type="date" value={date} onChange={e=>setDate(e.target.value)} style={S.inp}/></div>
+            <div style={{flex:1}}><div style={S.label}>Category</div><select value={cat} onChange={e=>setCat(e.target.value)} style={S.inp}>{EXP_CATS.map(c=><option key={c}>{c}</option>)}</select></div>
+          </div>
+          <div style={{marginTop:8}}><div style={S.label}>Description *</div><input placeholder="e.g. JCB rent, diesel..." value={desc} onChange={e=>setDesc(e.target.value)} style={S.inp}/></div>
+          <div style={{marginTop:8}}><div style={S.label}>Amount (₹) *</div><input type="number" placeholder="0" value={amount} onChange={e=>setAmount(e.target.value)} style={S.inp}/></div>
+          <div style={S.row}>
+            <button onClick={submit} style={{...S.btnGreen,flex:1}}>✓ Save</button>
+            <button onClick={()=>setShow(false)} style={{...S.btnGray,flex:1}}>Cancel</button>
+          </div>
+        </div>
+      )}
+
+      {/* Category pills */}
+      {Object.keys(byCategory).length>0&&(
+        <div style={{display:"flex",flexWrap:"wrap",gap:6,marginBottom:12}}>
+          {Object.entries(byCategory).map(([c,v])=>(
+            <div key={c} style={{background:"#1c1c2e",border:"1px solid #374151",borderRadius:20,padding:"4px 10px",fontSize:11}}>
+              <span style={{color:"#a78bfa"}}>{c}</span> <span style={{color:"#e8dcc8",fontWeight:700}}>₹{fmt(v)}</span>
+            </div>
+          ))}
+        </div>
+      )}
+
+      {expenses.length===0&&!show&&<div style={{textAlign:"center",padding:40,color:"#4b5563"}}><div style={{fontSize:36}}>📦</div><div style={{marginTop:8}}>Koi expense nahi</div></div>}
+
+      {expenses.map(e=>(
+        <div key={e.id} style={{...S.card,padding:"10px 12px",display:"flex",justifyContent:"space-between",alignItems:"center"}}>
+          <div style={{flex:1,minWidth:0}}>
+            <div style={{fontWeight:700,color:"#e8dcc8",fontSize:13}}>{e.description}</div>
+            <div style={{fontSize:11,color:"#6b7280",marginTop:2}}>{fmtDate(e.date)} · <span style={{color:"#a78bfa"}}>{e.category}</span></div>
+          </div>
+          <div style={{textAlign:"right",marginLeft:10}}>
+            <div style={{fontWeight:700,color:"#a78bfa",fontSize:13}}>₹{fmt(e.amount)}</div>
+            <button onClick={()=>deleteExpense(e.id)} style={{...S.btnRed,padding:"3px 7px",fontSize:11,marginTop:4}}>✕</button>
+          </div>
+        </div>
+      ))}
+    </div>
+  );
+}
+
+// ══════════════════════════════════════════════════════════
+// SUMMARY TAB
+// ══════════════════════════════════════════════════════════
+function SummaryTab({summary,workers,materials,expenses,siteName}){
+  const {staffTotal,matTotal,expTotal,total}=summary;
+  const pct=(v)=>total>0?Math.round(v/total*100):0;
+
+  // Top materials
+  const topMat=[...materials].sort((a,b)=>b.amount-a.amount).slice(0,5);
+  // Top expenses by category
+  const byCategory={};
+  expenses.forEach(e=>{byCategory[e.category]=(byCategory[e.category]||0)+Number(e.amount||0);});
+
+  return(
+    <div style={{padding:14}}>
+      {/* Grand Total */}
+      <div style={{background:"linear-gradient(135deg,#1c2d00,#0f1a00)",border:"1px solid #365314",borderRadius:12,padding:16,marginBottom:14,textAlign:"center"}}>
+        <div style={{fontSize:10,letterSpacing:3,color:"#65a30d",textTransform:"uppercase"}}>Grand Total — {siteName}</div>
+        <div style={{fontSize:32,fontWeight:700,color:"#a3e635",marginTop:4}}>₹{fmt(total)}</div>
+      </div>
+
+      {/* Breakdown */}
+      {[
+        ["👷","Staff Payment",staffTotal,"#22c55e",pct(staffTotal)],
+        ["🧱","Material Cost",matTotal,"#f59e0b",pct(matTotal)],
+        ["📦","Other Expenses",expTotal,"#a78bfa",pct(expTotal)],
+      ].map(([ic,lbl,val,col,p])=>(
+        <div key={lbl} style={{...S.card,padding:"12px 14px",marginBottom:10}}>
+          <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:8}}>
+            <div style={{fontSize:13,fontWeight:700}}>{ic} {lbl}</div>
+            <div style={{fontSize:14,fontWeight:700,color:col}}>₹{fmt(val)}</div>
+          </div>
+          <div style={{background:"#0c0e13",borderRadius:4,height:6,overflow:"hidden"}}>
+            <div style={{width:`${p}%`,height:"100%",background:col,borderRadius:4,transition:"width 0.5s"}}/>
+          </div>
+          <div style={{fontSize:11,color:"#6b7280",marginTop:4,textAlign:"right"}}>{p}% of total</div>
+        </div>
+      ))}
+
+      {/* Workers summary */}
+      {workers.length>0&&(
+        <div style={{...S.card,padding:14,marginBottom:10}}>
+          <div style={{fontWeight:700,color:"#fcd34d",marginBottom:10,fontSize:13}}>👷 Staff Breakdown</div>
+          {workers.map(w=>{
+            // All months total for this worker
+            return(
+              <div key={w.id} style={{display:"flex",justifyContent:"space-between",padding:"5px 0",borderBottom:"1px solid #1f2937"}}>
+                <div>
+                  <div style={{fontSize:12,color:"#e8dcc8"}}>{w.name}</div>
+                  <div style={{fontSize:10,color:"#6b7280"}}>{w.role} · ₹{w.wage}/day</div>
+                </div>
+              </div>
+            );
+          })}
+        </div>
+      )}
+
+      {/* Top Materials */}
+      {topMat.length>0&&(
+        <div style={{...S.card,padding:14,marginBottom:10}}>
+          <div style={{fontWeight:700,color:"#f59e0b",marginBottom:10,fontSize:13}}>🧱 Top Materials</div>
+          {topMat.map(m=>(
+            <div key={m.id} style={{display:"flex",justifyContent:"space-between",padding:"5px 0",borderBottom:"1px solid #1f2937"}}>
+              <div style={{fontSize:12,color:"#e8dcc8"}}>{m.item} <span style={{color:"#6b7280",fontSize:10}}>({m.qty} {m.unit})</span></div>
+              <div style={{fontSize:12,fontWeight:700,color:"#f59e0b"}}>₹{fmt(m.amount)}</div>
+            </div>
+          ))}
+        </div>
+      )}
+
+      {/* Expenses by category */}
+      {Object.keys(byCategory).length>0&&(
+        <div style={{...S.card,padding:14,marginBottom:10}}>
+          <div style={{fontWeight:700,color:"#a78bfa",marginBottom:10,fontSize:13}}>📦 Expenses by Category</div>
+          {Object.entries(byCategory).sort((a,b)=>b[1]-a[1]).map(([c,v])=>(
+            <div key={c} style={{display:"flex",justifyContent:"space-between",padding:"5px 0",borderBottom:"1px solid #1f2937"}}>
+              <div style={{fontSize:12,color:"#e8dcc8"}}>{c}</div>
+              <div style={{fontSize:12,fontWeight:700,color:"#a78bfa"}}>₹{fmt(v)}</div>
+            </div>
+          ))}
+        </div>
+      )}
+    </div>
+  );
+}
+
+ReactDOM.createRoot(document.getElementById("root")).render(<App/>);
+</script>
+</body>
+</html>
